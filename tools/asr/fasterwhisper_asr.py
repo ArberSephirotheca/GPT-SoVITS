@@ -101,22 +101,74 @@ def download_model(model_size: str):
     return model_path
 
 
-def execute_asr(input_folder, output_folder, model_path, language, precision):
+def load_existing_entries(list_path: str) -> set[str]:
+    existing = set()
+    if not os.path.isfile(list_path):
+        return existing
+    with open(list_path, "r", encoding="utf-8") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            parts = line.split("|", 3)
+            if not parts:
+                continue
+            existing.add(parts[0])
+    return existing
+
+
+def ensure_trailing_newline(path: str) -> None:
+    if not os.path.isfile(path):
+        return
+    if os.path.getsize(path) == 0:
+        return
+    with open(path, "rb+") as handle:
+        handle.seek(-1, os.SEEK_END)
+        if handle.read(1) != b"\n":
+            handle.write(b"\n")
+
+
+def execute_asr(input_folder, output_folder, model_path, language, precision, incremental=False):
     if language == "auto":
         language = None  # 不设置语种由模型自动输出概率最高的语种
     print("loading faster whisper model:", model_path, model_path)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = WhisperModel(model_path, device=device, compute_type=precision)
+    compute_type = precision
+    if device == "cpu" and precision == "float16":
+        compute_type = "float32"
+        print("CPU detected; overriding precision to float32")
+    try:
+        model = WhisperModel(model_path, device=device, compute_type=compute_type)
+    except ValueError as exc:
+        if device == "cuda" and "not compiled with CUDA" in str(exc):
+            device = "cpu"
+            if precision == "float16":
+                compute_type = "float32"
+            print("CTranslate2 has no CUDA support; falling back to CPU")
+            model = WhisperModel(model_path, device=device, compute_type=compute_type)
+        else:
+            raise
 
     input_file_names = os.listdir(input_folder)
     input_file_names.sort()
 
-    output = []
+    output_folder = output_folder or "output/asr_opt"
+    os.makedirs(output_folder, exist_ok=True)
     output_file_name = os.path.basename(input_folder)
+    output_file_path = os.path.abspath(f"{output_folder}/{output_file_name}.list")
+
+    existing_entries = set()
+    if incremental:
+        existing_entries = load_existing_entries(output_file_path)
+
+    output = []
 
     for file_name in tqdm(input_file_names):
         try:
             file_path = os.path.join(input_folder, file_name)
+            if incremental:
+                if file_path in existing_entries or os.path.abspath(file_path) in existing_entries:
+                    continue
             segments, info = model.transcribe(
                 audio=file_path,
                 beam_size=5,
@@ -138,13 +190,17 @@ def execute_asr(input_folder, output_folder, model_path, language, precision):
             print(e)
             traceback.print_exc()
 
-    output_folder = output_folder or "output/asr_opt"
-    os.makedirs(output_folder, exist_ok=True)
-    output_file_path = os.path.abspath(f"{output_folder}/{output_file_name}.list")
-
-    with open(output_file_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(output))
-        print(f"ASR 任务完成->标注文件路径: {output_file_path}\n")
+    if incremental:
+        if output:
+            ensure_trailing_newline(output_file_path)
+            with open(output_file_path, "a", encoding="utf-8") as f:
+                f.write("\n".join(output))
+                f.write("\n")
+        print(f"ASR 任务完成(增量)->标注文件路径: {output_file_path}\n")
+    else:
+        with open(output_file_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(output))
+            print(f"ASR 任务完成->标注文件路径: {output_file_path}\n")
     return output_file_path
 
 
@@ -175,6 +231,11 @@ if __name__ == "__main__":
         choices=["float16", "float32", "int8"],
         help="fp16, int8 or fp32",
     )
+    parser.add_argument(
+        "--incremental",
+        action="store_true",
+        help="Append only new WAVs to existing .list and skip already processed entries.",
+    )
 
     cmd = parser.parse_args()
     model_size = cmd.model_size
@@ -187,4 +248,5 @@ if __name__ == "__main__":
         model_path=model_path,
         language=cmd.language,
         precision=cmd.precision,
+        incremental=cmd.incremental,
     )
