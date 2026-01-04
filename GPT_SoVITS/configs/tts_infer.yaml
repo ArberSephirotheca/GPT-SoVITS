@@ -3,9 +3,9 @@ custom:
   cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base
   device: cuda
   is_half: false
-  t2s_weights_path: GPT_weights_v2ProPlus/lika-v2-e15.ckpt
+  t2s_weights_path: GPT_weights_v2ProPlus/lika-v3-e15.ckpt
   version: v2ProPlus
-  vits_weights_path: SoVITS_weights_v2ProPlus/lika-v2_e10_s2510.pth
+  vits_weights_path: SoVITS_weights_v2ProPlus/lika-v3_e8_s2112.pth
 v1:
   bert_base_path: GPT_SoVITS/pretrained_models/chinese-roberta-wwm-ext-large
   cnhuhbert_base_path: GPT_SoVITS/pretrained_models/chinese-hubert-base
